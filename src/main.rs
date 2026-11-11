@@ -743,45 +743,49 @@ impl App {
         let rows = self.visible_hosts();
         let cols = &self.columns;
         let mut sort = self.sort;
-        let mut table = TableBuilder::new(ui)
-            .id_salt(format!("{cols:?}")) // fresh column widths when the column set changes
-            .striped(true)
-            .resizable(true)
-            .sense(egui::Sense::click())
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
-        for (i, col) in cols.iter().enumerate() {
-            table = table.column(if i + 1 == cols.len() {
-                Column::remainder().at_least(60.0).clip(true)
-            } else {
-                Column::initial(col.width()).at_least(40.0).clip(true)
-            });
-        }
-        table
-            .header(ROW_HEIGHT, |mut header| {
-                for col in cols {
-                    header.col(|ui| sort_header(ui, *col, &mut sort));
-                }
-            })
-            .body(|body| {
-                body.rows(ROW_HEIGHT, rows.len(), |mut row| {
-                    let h = rows[row.index()];
-                    row.set_selected(self.selected == Some(h.ip));
+        // Wider than the window (many columns, or widened by hand): scroll sideways instead of cutting columns off
+        egui::ScrollArea::horizontal().auto_shrink(false).show(ui, |ui| {
+            let mut table = TableBuilder::new(ui)
+                .id_salt(format!("{cols:?}")) // fresh column widths when the column set changes
+                .striped(true)
+                .resizable(true)
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+            for (i, col) in cols.iter().enumerate() {
+                table = table.column(if i + 1 == cols.len() {
+                    // fills spare room, but never squeezes below its own width: then the table scrolls instead
+                    Column::remainder().at_least(col.width()).clip(true)
+                } else {
+                    Column::initial(col.width()).at_least(40.0).clip(true)
+                });
+            }
+            table
+                .header(ROW_HEIGHT, |mut header| {
                     for col in cols {
-                        row.col(|ui| cell(ui, *col, h, self.new_ips.contains(&h.ip)));
+                        header.col(|ui| sort_header(ui, *col, &mut sort));
                     }
-                    let response = row.response();
-                    if response.double_clicked() {
-                        action = Some(Action::ScanPorts(h.ip, ""));
-                    } else if response.clicked() || response.secondary_clicked() && self.selected != Some(h.ip) {
-                        action = Some(Action::Select(h.ip));
-                    }
-                    response.context_menu(|ui| {
-                        if let Some(a) = host_menu(ui, h) {
-                            action = Some(a);
+                })
+                .body(|body| {
+                    body.rows(ROW_HEIGHT, rows.len(), |mut row| {
+                        let h = rows[row.index()];
+                        row.set_selected(self.selected == Some(h.ip));
+                        for col in cols {
+                            row.col(|ui| cell(ui, *col, h, self.new_ips.contains(&h.ip)));
                         }
+                        let response = row.response();
+                        if response.double_clicked() {
+                            action = Some(Action::ScanPorts(h.ip, ""));
+                        } else if response.clicked() || response.secondary_clicked() && self.selected != Some(h.ip) {
+                            action = Some(Action::Select(h.ip));
+                        }
+                        response.context_menu(|ui| {
+                            if let Some(a) = host_menu(ui, h) {
+                                action = Some(a);
+                            }
+                        });
                     });
                 });
-            });
+        });
         self.sort = sort;
         action
     }
