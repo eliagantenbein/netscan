@@ -1,0 +1,49 @@
+# Pushing a tag vX.Y.Z builds NetScan.exe and NetScan-macOS.zip and publishes them as a GitHub release.
+# install.ps1 / install.sh and the in-app update check fetch from releases/latest.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --release
+      - run: cargo build --release
+      - run: Copy-Item target/release/netscan.exe NetScan.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: NetScan.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches Cargo.toml
+        run: grep -q "^version = \"${GITHUB_REF_NAME#v}\"" Cargo.toml || { echo "Tag $GITHUB_REF_NAME passt nicht zur Version in Cargo.toml"; exit 1; }
+      - run: sh mac/build-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: target/NetScan-macOS.zip
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - run: sha256sum NetScan.exe NetScan-macOS.zip > SHA256SUMS.txt
+      - run: gh release create "$GITHUB_REF_NAME" NetScan.exe NetScan-macOS.zip SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "NetScan $GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

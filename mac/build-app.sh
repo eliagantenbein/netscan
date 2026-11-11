@@ -1,29 +1,35 @@
 #!/bin/sh
-# Builds NetScan.app on a Mac.
+# Builds target/NetScan.app (Apple Silicon and Intel in one) and target/NetScan-macOS.zip on a Mac.
 # Needs: Rust (https://rustup.rs) and the Xcode command line tools (`xcode-select --install`).
 set -e
 cd "$(dirname "$0")/.."
 
-cargo build --release
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+export MACOSX_DEPLOYMENT_TARGET=11.0
+
+rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
+cargo build --release --target aarch64-apple-darwin
+cargo build --release --target x86_64-apple-darwin
 
 APP=target/NetScan.app
-rm -rf "$APP"
+rm -rf "$APP" target/NetScan-macOS.zip
 mkdir -p "$APP/Contents/MacOS"
-cp target/release/netscan "$APP/Contents/MacOS/NetScan"
+lipo -create -output "$APP/Contents/MacOS/NetScan" \
+    target/aarch64-apple-darwin/release/netscan target/x86_64-apple-darwin/release/netscan
 
 # NSLocalNetworkUsageDescription: since macOS 15 the system silently blocks local network access without it
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key><string>NetScan</string>
     <key>CFBundleDisplayName</key><string>NetScan</string>
-    <key>CFBundleIdentifier</key><string>local.netscan</string>
+    <key>CFBundleIdentifier</key><string>io.github.eliagantenbein.netscan</string>
     <key>CFBundleExecutable</key><string>NetScan</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.2.0</string>
-    <key>CFBundleVersion</key><string>2</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
+    <key>CFBundleVersion</key><string>$VERSION</string>
     <key>LSMinimumSystemVersion</key><string>11.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSLocalNetworkUsageDescription</key>
@@ -34,6 +40,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# ad-hoc signature so Gatekeeper accepts the locally built app
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
-echo "Fertig: $APP  (nach /Programme ziehen oder direkt öffnen)"
+# ad-hoc signature: Apple Silicon refuses to start unsigned code at all
+codesign --force --deep --sign - "$APP"
+ditto -c -k --keepParent "$APP" target/NetScan-macOS.zip
+echo "Fertig: $APP und target/NetScan-macOS.zip (Version $VERSION)"

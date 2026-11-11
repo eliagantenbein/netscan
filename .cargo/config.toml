@@ -1,3 +1,7 @@
-# Link the C runtime and libunwind statically, so netscan.exe runs without extra DLLs next to it.
+# Link the C runtime statically, so NetScan.exe runs without extra DLLs next to it.
+# gnullvm: local builds without Visual Studio; msvc: the release build on GitHub Actions.
 [target.x86_64-pc-windows-gnullvm]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]

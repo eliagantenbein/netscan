@@ -1,10 +1,35 @@
 # NetScan – IP Scanner & Network Scanner in Rust
 
-**Fast IP scanner, network scanner and port scanner for Windows and macOS, written in Rust.** Finds every device on your LAN in seconds and identifies operating system (exact Windows version and edition), vendor, model and services. Network map, Excel/CSV export, one-click RDP, SSH, web and file shares – a free alternative to Advanced IP Scanner and Angry IP Scanner. No installation, no admin rights, single executable.
+**Fast IP scanner, network scanner and port scanner for Windows and macOS, written in Rust.** Finds every device on your LAN in seconds and identifies operating system (exact Windows version and edition), vendor, model and services. Network map, Excel/CSV export, one-click RDP, SSH, web and file shares – a free alternative to Advanced IP Scanner and Angry IP Scanner. One-line install on Windows and macOS, no admin rights, single executable.
 
 IP- und Port-Scanner mit Geräteerkennung für ICT-Techniker – Windows und macOS.
 
-**Download:** fertige Versionen unter [Releases](https://github.com/eliagantenbein/netscan/releases). Windows: `NetScan.exe` herunterladen und starten, keine Installation nötig. Die eigene Version und die Suche nach Updates stehen im Fenster «Info» (F1).
+## Installation
+
+**Windows** – PowerShell öffnen (Startmenü → «PowerShell»), diese Zeile einfügen, Enter:
+
+```powershell
+irm https://raw.githubusercontent.com/eliagantenbein/netscan/main/install.ps1 | iex
+```
+
+**macOS** – Terminal öffnen, diese Zeile einfügen, Enter:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/eliagantenbein/netscan/main/install.sh | sh
+```
+
+Das ist alles: NetScan wird heruntergeladen, installiert (Windows: Startmenü, ohne Adminrechte; macOS: Programme) und gestartet. Dieselbe Zeile nochmals ausführen bringt die neuste Version; ob es eine gibt, zeigt NetScan unter «Info» (F1).
+
+Lieber von Hand? Unter [Releases](https://github.com/eliagantenbein/netscan/releases/latest) liegen `NetScan.exe` (einfach starten, keine Installation) und `NetScan-macOS.zip` (entpacken, nach «Programme» ziehen). Beide sind nicht von Microsoft bzw. Apple signiert, deshalb beim ersten Start:
+
+- **Windows** meldet «Der Computer wurde durch Windows geschützt» → «Weitere Informationen» → «Trotzdem ausführen».
+- **macOS** meldet, die App könne nicht geprüft werden → Systemeinstellungen → Datenschutz & Sicherheit → «Dennoch öffnen».
+
+Die Installationszeilen oben umgehen beides, weil die Datei nicht über den Browser kommt.
+
+**Entfernen:** Windows: Ordner `%LOCALAPPDATA%\Programs\NetScan` und den Startmenü-Eintrag löschen. macOS: `NetScan.app` aus «Programme» in den Papierkorb.
+
+## Funktionen
 
 - **Hosts:** Ping, ARP und TCP finden auch Geräte hinter einer Firewall. Erkannt werden Betriebssystem (Windows-Version samt Client/Server-Edition über SMB oder WinRM, Linux über SSH, Apple-Modelle über mDNS), Hersteller, Modell, Domäne und Dienste. Die Spalten sind wählbar und werden gespeichert.
 - **Netzwerkkarte:** Topologie Internet → Gateway → Gerätegruppen, dazu ein Adressraster des ganzen Bereichs.
@@ -45,9 +70,11 @@ cargo build --release
 sh mac/build-app.sh
 ```
 
-Ergibt `target/NetScan.app`. Beim ersten Scan fragt macOS nach dem Zugriff auf das lokale Netzwerk – erlauben, sonst findet NetScan nichts.
+Ergibt `target/NetScan.app` (Apple Silicon und Intel) und `target/NetScan-macOS.zip`. Beim ersten Scan fragt macOS nach dem Zugriff auf das lokale Netzwerk – erlauben, sonst findet NetScan nichts.
 
 **Herstellerliste:** Die IEEE-Liste `oui.csv` von <https://standards-oui.ieee.org/oui/oui.csv> im Browser herunterladen, als `data/oui.csv` ablegen und neu bauen. Ohne sie kommen Hersteller nur aus den Gerätedaten und einer kurzen eingebauten Liste.
+
+**Release:** Version in `Cargo.toml` erhöhen, committen, Tag `vX.Y.Z` pushen. GitHub Actions baut dann `NetScan.exe` und `NetScan-macOS.zip` und veröffentlicht sie als Release.
 
 ## Lizenz
 
