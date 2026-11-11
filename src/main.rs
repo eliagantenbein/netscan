@@ -215,12 +215,19 @@ struct App {
     update: Option<Update>,
 }
 
+// eframe sets the Dock icon from this image at runtime, so macOS gets the version with Apple's margin
+#[cfg(target_os = "macos")]
+const ICON: &[u8] = include_bytes!("../assets/icon-mac.png");
+#[cfg(not(target_os = "macos"))]
+const ICON: &[u8] = include_bytes!("../assets/icon.png");
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("NetScan")
             .with_inner_size([1180.0, 720.0])
-            .with_min_inner_size([860.0, 520.0]),
+            .with_min_inner_size([860.0, 520.0])
+            .with_icon(eframe::icon_data::from_png_bytes(ICON).expect("the icon in assets/ is a valid PNG")),
         ..Default::default()
     };
     eframe::run_native(

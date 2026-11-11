@@ -74,6 +74,8 @@ Ergibt `target/NetScan.app` (Apple Silicon und Intel) und `target/NetScan-macOS.
 
 **Herstellerliste:** Die IEEE-Liste liegt als `data/oui.csv` im Repo und wird beim Bauen eingebaut. Auffrischen (alle paar Monate): <https://standards-oui.ieee.org/oui/oui.csv> im Browser herunterladen, `data/oui.csv` damit ersetzen, committen. Die IEEE-Seite blockiert automatische Downloads, deshalb geht das nur von Hand.
 
+**Icon:** `assets/make-icon.py` zeichnet es (ohne Zusatzpakete) und schreibt `assets/icon.png`, `icon.ico` und `icon-mac.png`; nach einer Änderung einmal `python assets/make-icon.py` ausführen.
+
 **Release:** Version in `Cargo.toml` erhöhen, committen, Tag `vX.Y.Z` pushen. GitHub Actions baut dann `NetScan.exe` und `NetScan-macOS.zip` und veröffentlicht sie als Release.
 
 ## Lizenz

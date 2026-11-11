@@ -808,10 +808,10 @@ pub fn identify(
         Kind::ThisPc
     } else if Some(ip) == gateway {
         Kind::Router
+    } else if any(&text, NAS_WORDS) {
+        Kind::Nas // before the printer ports: NAS boxes share USB printers over IPP/LPD
     } else if has(9100) || has(631) || has(515) || any(&text, PRINTER_WORDS) {
         Kind::Printer
-    } else if any(&text, NAS_WORDS) {
-        Kind::Nas
     } else if has(902) || has(8006) || any(&text, VIRTUAL_HOST_WORDS) {
         Kind::Hypervisor
     } else if any(&said, NETWORK_WORDS) || ttl.is_some_and(|t| t > 128) {
@@ -1007,6 +1007,9 @@ mod tests {
         let printer = id(255, &[80, 9100], Evidence { snmp: Some("HP ETHERNET MULTI-ENVIRONMENT".into()), ..Evidence::default() }, None);
         assert_eq!((printer.kind, printer.vendor.as_deref()), (Kind::Printer, Some("HP")));
         assert_eq!(printer.os, None, "no TTL guess for appliances");
+        // QNAP and Synology share printers over IPP/LPD, so the printer ports alone don't make a printer
+        let qnap = id(64, &[80, 443, 445, 631], Evidence { http: Some(Http { title: Some("QTS".into()), ..Http::default() }), ..Evidence::default() }, Some("24-5E-BE-00-00-01"));
+        assert_eq!((qnap.kind, qnap.vendor.as_deref()), (Kind::Nas, Some("QNAP Systems, Inc.")));
 
         assert_eq!(id(255, &[22], Evidence::default(), None).kind, Kind::Network);
         assert_eq!(id(64, &[], Evidence::default(), Some("DA-11-22-33-44-55")).kind, Kind::Mobile);

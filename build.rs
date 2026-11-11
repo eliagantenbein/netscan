@@ -13,6 +13,13 @@ fn main() {
         }
     };
     fs::write(out, tsv).expect("OUT_DIR is writable");
+
+    // icon for Explorer, start menu and taskbar; the window icon itself comes from assets/icon.png
+    #[cfg(windows)]
+    {
+        println!("cargo:rerun-if-changed=assets/icon.ico");
+        winresource::WindowsResource::new().set_icon("assets/icon.ico").compile().expect("Windows-Ressource (Icon) nicht kompiliert");
+    }
 }
 
 /// IEEE format: Registry,Assignment,Organization Name,Organization Address (quoted where needed).

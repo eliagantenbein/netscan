@@ -1,6 +1,6 @@
 [package]
 name = "netscan"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "Fast IP and port scanner with device detection (OS, vendor, model), network map and Excel export - Windows and macOS"
 license = "MIT"
@@ -28,3 +28,6 @@ eframe = "0.37.0"
 egui_extras = "0.37.0"
 rfd = "0.18.0"
 rust_xlsxwriter = "0.102.0"
+
+[target."cfg(windows)".build-dependencies]
+winresource = "0.1.34"
