@@ -213,6 +213,8 @@ struct App {
     recent: Vec<String>,
     about: bool,
     update: Option<Update>,
+    /// Set at start: the background check shows a popup if it finds a newer version.
+    update_popup: bool,
 }
 
 // eframe sets the Dock icon from this image at runtime, so macOS gets the version with Apple's margin
@@ -239,7 +241,10 @@ fn main() -> eframe::Result {
                 style.spacing.item_spacing = egui::vec2(8.0, 6.0);
                 style.spacing.button_padding = egui::vec2(10.0, 5.0);
             });
-            Ok(Box::new(App::new(std::env::args().skip(1).collect())))
+            let mut app = App::new(std::env::args().skip(1).collect());
+            app.update = Some(check_update());
+            app.update_popup = true;
+            Ok(Box::new(app))
         }),
     )
 }
@@ -276,6 +281,7 @@ impl App {
             recent: Vec::new(),
             about: false,
             update: None,
+            update_popup: false,
         };
         if let Some(text) = platform::settings_file().and_then(|p| std::fs::read_to_string(p).ok()) {
             app.apply_settings(&text);
@@ -490,6 +496,7 @@ impl App {
         if esc {
             match &self.job {
                 Some(job) => job.progress.cancel(),
+                None if self.update_popup => self.update_popup = false,
                 None if self.about => self.about = false,
                 None => self.selected = None,
             }
@@ -893,8 +900,7 @@ impl App {
                 ui.horizontal(|ui| match &self.update {
                     None => {
                         if ui.button("Nach Updates suchen").clicked() {
-                            let repo = REPO_URL.trim_start_matches("https://github.com/").to_string();
-                            self.update = Some(Update::Checking(thread::spawn(move || platform::latest_release(&repo))));
+                            self.update = Some(check_update());
                         }
                     }
                     Some(Update::Checking(_)) => {
@@ -905,8 +911,8 @@ impl App {
                         match result {
                             Ok(tag) if is_newer(tag, VERSION) => {
                                 ui.colored_label(NEW_COLOR, format!("Version {} ist verfügbar", tag.trim_start_matches('v')));
-                                if ui.button("Herunterladen").clicked() {
-                                    platform::open(&format!("{REPO_URL}/releases/latest"));
+                                if ui.button("Jetzt aktualisieren").clicked() {
+                                    platform::self_update(repo());
                                 }
                             }
                             Ok(_) => {
@@ -960,6 +966,44 @@ impl App {
             });
         self.about = open;
     }
+
+    /// Shown once after start when GitHub has a newer version; "Später" asks again at the next start.
+    fn update_window(&mut self, ctx: &egui::Context) {
+        let Some(Update::Done(Ok(tag))) = &self.update else { return };
+        let latest = tag.trim_start_matches('v').to_string();
+        egui::Window::new("Update verfügbar")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_width(360.0);
+                ui.label(RichText::new(format!("NetScan {latest} ist verfügbar")).size(17.0).strong());
+                ui.label(format!("Installiert ist Version {VERSION}."));
+                ui.hyperlink_to("Was ist neu?", format!("{REPO_URL}/releases/latest"));
+                ui.add_space(8.0);
+                ui.label(RichText::new("Das Update läuft in einem eigenen Fenster; NetScan schliesst sich und startet neu.").weak());
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button(RichText::new("Jetzt aktualisieren").strong()).clicked() {
+                        platform::self_update(repo());
+                        self.update_popup = false;
+                    }
+                    if ui.button("Später").on_hover_text("Esc").clicked() {
+                        self.update_popup = false;
+                    }
+                });
+            });
+    }
+}
+
+/// "owner/name" of the GitHub repository.
+fn repo() -> &'static str {
+    REPO_URL.trim_start_matches("https://github.com/")
+}
+
+/// Asks GitHub for the newest release in the background.
+fn check_update() -> Update {
+    Update::Checking(thread::spawn(|| platform::latest_release(repo())))
 }
 
 /// "v0.10.1" is newer than "0.9.3": compared number by number, a leading v ignored.
@@ -984,13 +1028,19 @@ impl eframe::App for App {
         if let Some(Update::Checking(handle)) = &self.update {
             if handle.is_finished() {
                 if let Some(Update::Checking(handle)) = self.update.take() {
-                    self.update = Some(Update::Done(handle.join().unwrap_or_else(|_| Err("Prüfung abgebrochen".into()))));
+                    let result = handle.join().unwrap_or_else(|_| Err("Prüfung abgebrochen".into()));
+                    // the popup only reports a newer version; offline or up to date stays silent
+                    self.update_popup &= matches!(&result, Ok(tag) if is_newer(tag, VERSION));
+                    self.update = Some(Update::Done(result));
                 }
             } else {
                 ui.ctx().request_repaint_after(Duration::from_millis(200));
             }
         }
         self.about_window(ui.ctx());
+        if self.update_popup {
+            self.update_window(ui.ctx());
+        }
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         let mut action = None;

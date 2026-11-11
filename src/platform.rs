@@ -212,6 +212,12 @@ mod imp {
     pub fn traceroute(ip: Ipv4Addr) {
         console(&["tracert", "-d", &ip.to_string()]);
     }
+
+    /// Runs the official install line in a visible window; it stops the installed NetScan and starts the new one.
+    pub fn self_update(repo: &str) {
+        let line = format!("irm https://raw.githubusercontent.com/{repo}/main/install.ps1 | iex");
+        console(&["powershell", "-NoProfile", "-Command", &line]);
+    }
 }
 
 #[cfg(unix)]
@@ -420,6 +426,11 @@ mod imp {
         // tracepath comes with iputils on every distribution, traceroute often isn't installed
         #[cfg(not(target_os = "macos"))]
         console(&["tracepath", "-n", &ip.to_string()]);
+    }
+
+    /// Runs the official install line in a terminal; it stops the running NetScan and starts the new one.
+    pub fn self_update(repo: &str) {
+        console(&[&format!("curl -fsSL https://raw.githubusercontent.com/{repo}/main/install.sh | sh")]);
     }
 }
 
