@@ -16,6 +16,36 @@ pub fn settings_file() -> Option<PathBuf> {
     Some(base.join("NetScan").join("settings.txt"))
 }
 
+/// Tag of the newest GitHub release, via the curl that ships with Windows 10+ and macOS (no TLS stack in the app).
+pub fn latest_release(repo: &str) -> Result<String, String> {
+    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
+    let mut cmd = std::process::Command::new("curl");
+    cmd.args(["-sS", "--max-time", "10", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: NetScan", "-w", "\n%{http_code}", &url]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000; // no console flashing up behind the GUI
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output().map_err(|_| "curl nicht gefunden".to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let (body, code) = text.rsplit_once('\n').unwrap_or(("", &text));
+    match code.trim() {
+        "200" => json_string(body, "tag_name").ok_or_else(|| "unerwartete Antwort von GitHub".to_string()),
+        // GitHub also answers 404 while the repository is private
+        "404" => Err("keine öffentliche Version gefunden".to_string()),
+        "" | "000" => Err("GitHub nicht erreichbar – keine Internetverbindung?".to_string()),
+        code => Err(format!("GitHub antwortet mit HTTP {code}")),
+    }
+}
+
+/// The string value of `key` in a flat JSON object; enough for one field of a known API answer.
+fn json_string(body: &str, key: &str) -> Option<String> {
+    let rest = &body[body.find(&format!("\"{key}\""))? + key.len() + 2..];
+    let rest = rest.trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    Some(rest[..rest.find('"')?].to_string())
+}
+
 #[cfg(windows)]
 mod imp {
     use std::collections::HashMap;
@@ -336,6 +366,13 @@ pub fn parse_route_gateway(output: &str) -> Option<Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_release_tag() {
+        let body = r#"{"url":"x","tag_name" : "v0.3.1","name":"NetScan 0.3.1"}"#;
+        assert_eq!(json_string(body, "tag_name").as_deref(), Some("v0.3.1"));
+        assert_eq!(json_string(body, "missing"), None);
+    }
 
     #[test]
     fn parses_macos_tool_output() {

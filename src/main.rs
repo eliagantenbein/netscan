@@ -20,6 +20,9 @@ use eframe::egui::{self, Color32, RichText, TextEdit, Ui};
 use egui_extras::{Column, TableBuilder};
 use scan::{Host, Kind, Progress};
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const REPO_URL: &str = env!("CARGO_PKG_REPOSITORY");
+const RECENT_MAX: usize = 6;
 const PORT_TIMEOUT_MS: u64 = 500;
 const ROW_HEIGHT: f32 = 24.0;
 pub const NEW_COLOR: Color32 = Color32::from_rgb(46, 160, 67);
@@ -60,6 +63,11 @@ pub struct PortScan {
 enum Finished {
     Ip(IpScan),
     Port(PortScan),
+}
+
+enum Update {
+    Checking(JoinHandle<Result<String, String>>),
+    Done(Result<String, String>),
 }
 
 struct Job {
@@ -201,6 +209,10 @@ struct App {
     job: Option<Job>,
     message: Option<(String, bool)>, // text, is_error
     autostart: bool,
+    /// Ranges scanned lately, newest first; a technician moves between the same few customer networks.
+    recent: Vec<String>,
+    about: bool,
+    update: Option<Update>,
 }
 
 fn main() -> eframe::Result {
@@ -253,6 +265,9 @@ impl App {
             job: None,
             message: None,
             autostart: target.is_some(),
+            recent: Vec::new(),
+            about: false,
+            update: None,
         };
         if let Some(text) = platform::settings_file().and_then(|p| std::fs::read_to_string(p).ok()) {
             app.apply_settings(&text);
@@ -273,6 +288,7 @@ impl App {
                     }
                 }
                 "ports" => self.ports = value.trim().to_string(),
+                "recent" => self.recent = value.split('|').map(str::trim).filter(|r| !r.is_empty()).take(RECENT_MAX).map(String::from).collect(),
                 _ => {}
             }
         }
@@ -280,7 +296,7 @@ impl App {
 
     fn settings_text(&self) -> String {
         let cols: Vec<String> = self.columns.iter().map(|c| format!("{c:?}")).collect();
-        format!("columns={}\nports={}\n", cols.join(","), self.ports)
+        format!("columns={}\nports={}\nrecent={}\n", cols.join(","), self.ports, self.recent.join("|"))
     }
 
     fn save_settings(&self) {
@@ -309,6 +325,10 @@ impl App {
             Err(e) => return self.message = Some((e, true)),
         };
         let range = self.range.trim().to_string();
+        self.recent.retain(|r| *r != range);
+        self.recent.insert(0, range.clone());
+        self.recent.truncate(RECENT_MAX);
+        self.save_settings();
         self.spawn(ctx, move |p| {
             let started = Instant::now();
             let hosts = scan::discover(&ips, p);
@@ -439,12 +459,13 @@ impl App {
         rows
     }
 
-    /// F5 scan, Esc stop or deselect, Ctrl+F filter, Ctrl+E export, Ctrl+C copy the selected host.
+    /// F5 scan, Esc stop or deselect, Ctrl+F filter, Ctrl+E export, Ctrl+C copy the selected host, F1 info.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let typing = ctx.memory(|m| m.focused().is_some());
-        let (f5, esc, find, export, copy) = ctx.input(|i| {
+        let (f1, f5, esc, find, export, copy) = ctx.input(|i| {
             let ctrl = i.modifiers.command;
             (
+                i.key_pressed(egui::Key::F1),
                 i.key_pressed(egui::Key::F5),
                 i.key_pressed(egui::Key::Escape),
                 ctrl && i.key_pressed(egui::Key::F),
@@ -452,12 +473,16 @@ impl App {
                 i.events.iter().any(|e| matches!(e, egui::Event::Copy)),
             )
         });
+        if f1 {
+            self.about = !self.about;
+        }
         if f5 {
             self.scan_now(ctx);
         }
         if esc {
             match &self.job {
                 Some(job) => job.progress.cancel(),
+                None if self.about => self.about = false,
                 None => self.selected = None,
             }
         }
@@ -509,7 +534,10 @@ impl App {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("NetScan").size(20.0).strong());
-            ui.add_space(18.0);
+            if ui.add(egui::Label::new(RichText::new(format!("v{VERSION}")).weak()).sense(egui::Sense::click())).on_hover_text("Version, Updates, Tastenkürzel (F1)").clicked() {
+                self.about = true;
+            }
+            ui.add_space(14.0);
             ui.selectable_value(&mut self.tab, Tab::Hosts, RichText::new("Hosts").size(15.0));
             ui.selectable_value(&mut self.tab, Tab::Map, RichText::new("Netzwerkkarte").size(15.0));
             ui.selectable_value(&mut self.tab, Tab::Ports, RichText::new("Ports").size(15.0));
@@ -530,6 +558,9 @@ impl App {
                 })
                 .response
                 .on_disabled_hover_text("Zuerst scannen");
+                if ui.button("Info").on_hover_text("Version, Updates, Tastenkürzel (F1)").clicked() {
+                    self.about = !self.about;
+                }
             });
         });
         ui.add_space(4.0);
@@ -565,9 +596,19 @@ impl App {
                             ui.close();
                         }
                     }
+                    if !self.recent.is_empty() {
+                        ui.separator();
+                        ui.label(RichText::new("Zuletzt gescannt").weak());
+                        for r in self.recent.clone() {
+                            if ui.button(&r).clicked() {
+                                self.range = r;
+                                ui.close();
+                            }
+                        }
+                    }
                 })
                 .response
-                .on_hover_text("Netz eines Adapters übernehmen (LAN, WLAN, VPN)");
+                .on_hover_text("Netz eines Adapters oder einen zuletzt gescannten Bereich übernehmen");
                 enter && a.lost_focus()
             };
             if let Some(job) = &self.job {
@@ -654,6 +695,10 @@ impl App {
             empty_state(ui, "Noch kein Scan", "Bereich prüfen und «Netz scannen» klicken – oder Enter drücken.");
             return None;
         };
+        if total == 0 {
+            empty_state(ui, "Keine aktiven Hosts", "Kein Gerät hat geantwortet. Stimmt der Bereich? Über «▾» neben dem Bereich lassen sich die Netze dieses Computers übernehmen.");
+            return None;
+        }
         let mut action = None;
         let shown = self.visible_hosts().len();
         ui.horizontal(|ui| {
@@ -744,6 +789,10 @@ impl App {
             ui.label(RichText::new(format!("{} Ports je Host · {:.1} s · {}", scan.port_count, scan.secs, scan.at.format("%d.%m.%Y %H:%M"))).weak());
         });
         ui.add_space(6.0);
+        if scan.hosts.is_empty() {
+            empty_state(ui, "Kein Host erreichbar", "Im Bereich hat kein Gerät geantwortet. Eine einzelne IP wird auch ohne Ping-Antwort gescannt.");
+            return None;
+        }
         if scan.open.is_empty() {
             empty_state(ui, "Keine offenen Ports", &format!("{} Ports auf {} Host(s) geprüft.", scan.port_count, scan.hosts.len()));
             return None;
@@ -817,6 +866,100 @@ impl App {
     }
 }
 
+impl App {
+    fn about_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.about;
+        egui::Window::new("Über NetScan")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_width(420.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("NetScan").size(22.0).strong());
+                    ui.label(RichText::new(format!("Version {VERSION}")).size(15.0));
+                });
+                ui.label("IP- und Port-Scanner für ICT-Techniker · Windows und macOS");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| match &self.update {
+                    None => {
+                        if ui.button("Nach Updates suchen").clicked() {
+                            let repo = REPO_URL.trim_start_matches("https://github.com/").to_string();
+                            self.update = Some(Update::Checking(thread::spawn(move || platform::latest_release(&repo))));
+                        }
+                    }
+                    Some(Update::Checking(_)) => {
+                        ui.spinner();
+                        ui.label("Prüfe GitHub …");
+                    }
+                    Some(Update::Done(result)) => {
+                        match result {
+                            Ok(tag) if is_newer(tag, VERSION) => {
+                                ui.colored_label(NEW_COLOR, format!("Version {} ist verfügbar", tag.trim_start_matches('v')));
+                                if ui.button("Herunterladen").clicked() {
+                                    platform::open(&format!("{REPO_URL}/releases/latest"));
+                                }
+                            }
+                            Ok(_) => {
+                                ui.label("Du hast die neuste Version.");
+                            }
+                            Err(e) => {
+                                ui.colored_label(ui.visuals().warn_fg_color, format!("Prüfung nicht möglich: {e}"));
+                            }
+                        }
+                        if ui.small_button("↻").on_hover_text("Nochmals prüfen").clicked() {
+                            self.update = None;
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+                ui.hyperlink_to("Projekt auf GitHub", REPO_URL);
+                ui.hyperlink_to("Alle Versionen und Downloads", format!("{REPO_URL}/releases"));
+                ui.hyperlink_to("Fehler melden oder Wunsch äussern", format!("{REPO_URL}/issues"));
+                ui.add_space(8.0);
+                ui.strong("Tastenkürzel");
+                egui::Grid::new("keys").num_columns(2).spacing([16.0, 3.0]).show(ui, |ui| {
+                    for (key, what) in [
+                        ("Enter / F5", "Scan starten"),
+                        ("Esc", "Scan stoppen, Fenster oder Details schliessen"),
+                        ("Ctrl+F", "Filter"),
+                        ("Ctrl+E", "Excel-Bericht"),
+                        ("Ctrl+C", "ausgewählten Host kopieren"),
+                        ("Doppelklick", "Ports des Hosts scannen"),
+                        ("Rechtsklick", "Aktionen: RDP, Freigaben, Ping …"),
+                        ("F1", "dieses Fenster"),
+                    ] {
+                        ui.label(RichText::new(key).monospace());
+                        ui.label(what);
+                        ui.end_row();
+                    }
+                });
+                if let Some(path) = platform::settings_file() {
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Einstellungen:").weak());
+                        if ui.link("Ordner öffnen").on_hover_text(path.display().to_string()).clicked() {
+                            if let Some(dir) = path.parent() {
+                                let _ = std::fs::create_dir_all(dir);
+                                platform::open(&dir.to_string_lossy());
+                            }
+                        }
+                    });
+                }
+                ui.add_space(4.0);
+                ui.label(RichText::new("MIT-Lizenz · © 2026 Elia Gantenbein").weak());
+            });
+        self.about = open;
+    }
+}
+
+/// "v0.10.1" is newer than "0.9.3": compared number by number, a leading v ignored.
+fn is_newer(latest: &str, current: &str) -> bool {
+    let parts = |v: &str| v.trim().trim_start_matches('v').split('.').map(|p| p.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>();
+    parts(latest) > parts(current)
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         if std::mem::take(&mut self.autostart) {
@@ -830,6 +973,16 @@ impl eframe::App for App {
                 self.target = ip.to_string();
             }
         }
+        if let Some(Update::Checking(handle)) = &self.update {
+            if handle.is_finished() {
+                if let Some(Update::Checking(handle)) = self.update.take() {
+                    self.update = Some(Update::Done(handle.join().unwrap_or_else(|_| Err("Prüfung abgebrochen".into()))));
+                }
+            } else {
+                ui.ctx().request_repaint_after(Duration::from_millis(200));
+            }
+        }
+        self.about_window(ui.ctx());
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         let mut action = None;
@@ -1225,5 +1378,16 @@ mod tests {
         assert_eq!((&other.columns, &other.ports), (&app.columns, &app.ports));
         other.apply_settings("columns=");
         assert!(!other.columns.is_empty(), "an empty list keeps the current columns");
+        app.recent = vec!["10.0.0.0/24".into(), "192.168.1.1-50".into()];
+        other.apply_settings(&app.settings_text());
+        assert_eq!(other.recent, app.recent);
+    }
+
+    #[test]
+    fn compares_versions_by_number() {
+        assert!(is_newer("v0.10.0", "0.9.3"));
+        assert!(is_newer("1.0.0", "0.2.0"));
+        assert!(!is_newer("v0.2.0", "0.2.0"));
+        assert!(!is_newer("0.1.9", "0.2.0"));
     }
 }
