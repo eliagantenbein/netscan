@@ -495,7 +495,7 @@ impl App {
         }
         if copy && !typing {
             if let Some(h) = self.selected_host() {
-                let text = self.columns.iter().map(|c| c.text(h)).collect::<Vec<_>>().join("\t");
+                let text = tsv_row(&self.columns.iter().map(|c| c.text(h)).collect::<Vec<_>>());
                 ctx.copy_text(text);
                 self.message = Some(("Zeile in die Zwischenablage kopiert".into(), false));
             }
@@ -719,7 +719,7 @@ impl App {
                 self.column_menu(ui);
                 if ui.button("Tabelle kopieren").on_hover_text("Sichtbare Zeilen und Spalten – einfügbar in Excel oder ein Ticket").clicked() {
                     let rows = self.table_rows();
-                    ui.ctx().copy_text(rows.iter().map(|r| r.join("\t")).collect::<Vec<_>>().join("\n"));
+                    ui.ctx().copy_text(rows.iter().map(|r| tsv_row(r)).collect::<Vec<_>>().join("\n"));
                     action = Some(Action::Notice(format!("{} Zeilen kopiert", rows.len() - 1), false));
                 }
             });
@@ -821,7 +821,7 @@ impl App {
                             if ui.button("Kopieren").on_hover_text("Host mit allen offenen Ports").clicked() {
                                 let lines: Vec<String> = ports
                                     .iter()
-                                    .map(|(p, info)| format!("{ip}:{p}\t{}\t{}", parse::describe(*p), info.map_or("", |s| s.as_str())))
+                                    .map(|(p, info)| tsv_row(&[format!("{ip}:{p}"), parse::describe(*p), info.cloned().unwrap_or_default()]))
                                     .collect();
                                 ui.ctx().copy_text(lines.join("\n"));
                                 action = Some(Action::Notice(format!("{ip} mit {} Ports kopiert", ports.len()), false));
@@ -1020,8 +1020,7 @@ impl eframe::App for App {
 /// Semicolon-separated with BOM: Excel in German-speaking locales opens it with umlauts and columns intact.
 fn csv(rows: &[Vec<String>]) -> String {
     let field = |f: &str| {
-        // a leading = + - @ would run as a formula in Excel; device names and web titles are untrusted
-        let f = if f.starts_with(['=', '+', '-', '@']) { format!("'{f}") } else { f.to_string() };
+        let f = defuse(f);
         if f.contains([';', '"', '\n', '\r']) { format!("\"{}\"", f.replace('"', "\"\"")) } else { f }
     };
     let mut out = String::from('\u{FEFF}');
@@ -1030,6 +1029,16 @@ fn csv(rows: &[Vec<String>]) -> String {
         out.push_str("\r\n");
     }
     out
+}
+
+/// A leading = + - @ would run as a formula in Excel; device names, banners and web titles are untrusted.
+fn defuse(f: &str) -> String {
+    if f.starts_with(['=', '+', '-', '@']) { format!("'{f}") } else { f.to_string() }
+}
+
+/// One tab-separated line for the clipboard, safe to paste into Excel.
+fn tsv_row<S: AsRef<str>>(cells: &[S]) -> String {
+    cells.iter().map(|c| defuse(&c.as_ref().replace(['\t', '\r', '\n'], " "))).collect::<Vec<_>>().join("\t")
 }
 
 fn shorten(text: &str, max: usize) -> String {
@@ -1365,6 +1374,8 @@ mod tests {
             vec!["10.0.0.2".to_string(), "=HYPERLINK(1)".to_string()],
         ];
         assert_eq!(csv(&rows), "\u{FEFF}IP;Name\r\n10.0.0.1;\"a;b \"\"x\"\"\"\r\n10.0.0.2;'=HYPERLINK(1)\r\n");
+        // clipboard: a banner must neither run as a formula nor break the row
+        assert_eq!(tsv_row(&["10.0.0.2", "=cmd|x\tA\r\nB", "@SUM(1)"]), "10.0.0.2\t'=cmd|x A  B\t'@SUM(1)");
     }
 
     #[test]
