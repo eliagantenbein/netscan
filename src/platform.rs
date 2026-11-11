@@ -1,5 +1,5 @@
 //! Operating-system specific pieces: ICMP, ARP, routes, adapters, name lookup, and opening tools.
-//! Windows uses the IP Helper API; macOS uses libc and the system tools every Mac has.
+//! Windows uses the IP Helper API; macOS and Linux use libc, the system tools and (Linux) /proc.
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
@@ -7,16 +7,22 @@ use std::path::PathBuf;
 
 pub use imp::*;
 
-/// Where the settings file lives: %APPDATA%\NetScan on Windows, ~/Library/Application Support/NetScan on macOS.
+/// Where the settings file lives: %APPDATA%\NetScan on Windows, ~/Library/Application Support/NetScan on macOS,
+/// $XDG_CONFIG_HOME/NetScan (usually ~/.config/NetScan) on Linux.
 pub fn settings_file() -> Option<PathBuf> {
     #[cfg(windows)]
     let base = PathBuf::from(std::env::var_os("APPDATA")?);
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     let base = PathBuf::from(std::env::var_os("HOME")?).join("Library").join("Application Support");
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let base = match std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
+    };
     Some(base.join("NetScan").join("settings.txt"))
 }
 
-/// Tag of the newest GitHub release, via the curl that ships with Windows 10+ and macOS (no TLS stack in the app).
+/// Tag of the newest GitHub release, via the curl that ships with Windows 10+, macOS and most Linux desktops (no TLS stack in the app).
 pub fn latest_release(repo: &str) -> Result<String, String> {
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
     let mut cmd = std::process::Command::new("curl");
@@ -208,20 +214,31 @@ mod imp {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod imp {
     use std::collections::HashMap;
     use std::ffi::{c_char, c_int, c_void, CStr};
     use std::net::Ipv4Addr;
     use std::process::Command;
 
-    /// Each ping is a `/sbin/ping` process: fewer at once than the Windows API calls.
+    /// Each ping is a `ping` process: fewer at once than the Windows API calls.
     pub const PING_WORKERS: usize = 128;
 
+    #[cfg(target_os = "macos")]
     #[repr(C)]
     struct SockaddrIn {
         len: u8,
         family: u8,
+        port: u16,
+        addr: [u8; 4],
+        zero: [u8; 8],
+    }
+
+    /// Linux has no length byte; the family is a 16-bit field.
+    #[cfg(not(target_os = "macos"))]
+    #[repr(C)]
+    struct SockaddrIn {
+        family: u16,
         port: u16,
         addr: [u8; 4],
         zero: [u8; 8],
@@ -246,23 +263,47 @@ mod imp {
         ) -> c_int;
     }
 
+    #[cfg(target_os = "macos")]
     const AF_INET: u8 = 2;
+    #[cfg(not(target_os = "macos"))]
+    const AF_INET: u16 = 2;
 
     fn run(program: &str, args: &[&str]) -> String {
         Command::new(program).args(args).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
     }
 
+    #[cfg(target_os = "macos")]
     pub fn ping(ip: Ipv4Addr, timeout_ms: u32) -> Option<(u32, u8)> {
         // -W waits in milliseconds on macOS; -n skips the reverse lookup
         super::parse_ping(&run("/sbin/ping", &["-n", "-c", "1", "-W", &timeout_ms.to_string(), &ip.to_string()]))
     }
 
+    /// iputils and busybox ping; unprivileged ICMP is allowed on current distributions.
+    #[cfg(not(target_os = "macos"))]
+    pub fn ping(ip: Ipv4Addr, timeout_ms: u32) -> Option<(u32, u8)> {
+        // shortcut: -W takes whole seconds (busybox, older iputils), so a silent host costs 1 s instead of 0.8 s
+        let secs = timeout_ms.div_ceil(1000).max(1).to_string();
+        super::parse_ping(&run("ping", &["-n", "-c", "1", "-W", &secs, &ip.to_string()]))
+    }
+
+    #[cfg(target_os = "macos")]
     pub fn arp_table() -> HashMap<Ipv4Addr, String> {
         super::parse_arp(&run("/usr/sbin/arp", &["-an"]))
     }
 
+    #[cfg(not(target_os = "macos"))]
+    pub fn arp_table() -> HashMap<Ipv4Addr, String> {
+        super::parse_proc_arp(&std::fs::read_to_string("/proc/net/arp").unwrap_or_default())
+    }
+
+    #[cfg(target_os = "macos")]
     pub fn gateway() -> Option<Ipv4Addr> {
         super::parse_route_gateway(&run("/sbin/route", &["-n", "get", "default"]))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn gateway() -> Option<Ipv4Addr> {
+        super::parse_proc_route(&std::fs::read_to_string("/proc/net/route").unwrap_or_default())
     }
 
     pub fn local_networks() -> Vec<(Ipv4Addr, u32)> {
@@ -291,15 +332,30 @@ mod imp {
 
     /// Reverse lookup through the system resolver (DNS and mDNS).
     pub fn hostname(ip: Ipv4Addr) -> Option<String> {
+        #[cfg(target_os = "macos")]
         const NI_NAMEREQD: c_int = 0x04;
+        #[cfg(not(target_os = "macos"))]
+        const NI_NAMEREQD: c_int = 0x08;
+        #[cfg(target_os = "macos")]
         let sa = SockaddrIn { len: 16, family: AF_INET, port: 0, addr: ip.octets(), zero: [0; 8] };
+        #[cfg(not(target_os = "macos"))]
+        let sa = SockaddrIn { family: AF_INET, port: 0, addr: ip.octets(), zero: [0; 8] };
         let mut name = [0 as c_char; 1025];
         let rc = unsafe { getnameinfo(&sa, 16, name.as_mut_ptr(), name.len() as u32, std::ptr::null_mut(), 0, NI_NAMEREQD) };
         (rc == 0).then(|| unsafe { CStr::from_ptr(name.as_ptr()) }.to_string_lossy().into_owned()).filter(|n| !n.is_empty())
     }
 
     pub fn open(target: &str) {
+        #[cfg(target_os = "macos")]
         let _ = Command::new("open").arg(target).spawn();
+        #[cfg(not(target_os = "macos"))]
+        let _ = Command::new("xdg-open").arg(target).spawn();
+    }
+
+    /// Starts the first of these commands that is installed.
+    #[cfg(not(target_os = "macos"))]
+    fn spawn_first(commands: &[Vec<String>]) -> bool {
+        commands.iter().any(|c| Command::new(&c[0]).args(&c[1..]).spawn().is_ok())
     }
 
     /// File share address: `smb://ip` or `smb://ip/name`.
@@ -308,11 +364,43 @@ mod imp {
     }
 
     /// Microsoft's "Windows App" (formerly Remote Desktop) handles rdp:// links.
+    #[cfg(target_os = "macos")]
     pub fn remote_desktop(ip: Ipv4Addr) {
         open(&format!("rdp://full%20address=s:{ip}"));
     }
 
+    /// Remmina or FreeRDP, whichever is installed.
+    #[cfg(not(target_os = "macos"))]
+    pub fn remote_desktop(ip: Ipv4Addr) {
+        let cmd = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let v = format!("/v:{ip}");
+        if !spawn_first(&[cmd(&["remmina", "-c", &format!("rdp://{ip}")]), cmd(&["xfreerdp3", &v]), cmd(&["xfreerdp", &v])]) {
+            open(&format!("rdp://{ip}"));
+        }
+    }
+
+    /// Runs a command in the first terminal emulator found; the window stays open until Enter.
+    #[cfg(not(target_os = "macos"))]
+    fn console(args: &[&str]) {
+        let line = format!("{}; echo; printf 'Enter schliesst das Fenster '; read _", args.join(" "));
+        let terminals: [&[&str]; 7] = [
+            &["gnome-terminal", "--"],
+            &["ptyxis", "--"],
+            &["kgx", "--"],
+            &["konsole", "-e"],
+            &["xfce4-terminal", "-x"],
+            &["x-terminal-emulator", "-e"],
+            &["xterm", "-e"],
+        ];
+        let commands: Vec<Vec<String>> = terminals
+            .iter()
+            .map(|t| t.iter().copied().chain(["sh", "-c", line.as_str()]).map(String::from).collect())
+            .collect();
+        spawn_first(&commands);
+    }
+
     /// Runs a command in a new Terminal window; the arguments are IPs and fixed words, nothing to escape.
+    #[cfg(target_os = "macos")]
     fn console(args: &[&str]) {
         let script = format!("tell application \"Terminal\"\ndo script \"{}\"\nactivate\nend tell", args.join(" "));
         let _ = Command::new("osascript").args(["-e", &script]).spawn();
@@ -327,11 +415,15 @@ mod imp {
     }
 
     pub fn traceroute(ip: Ipv4Addr) {
+        #[cfg(target_os = "macos")]
         console(&["traceroute", "-n", &ip.to_string()]);
+        // tracepath comes with iputils on every distribution, traceroute often isn't installed
+        #[cfg(not(target_os = "macos"))]
+        console(&["tracepath", "-n", &ip.to_string()]);
     }
 }
 
-// the parsers serve the macOS side; they are tested on every platform
+// the parsers serve macOS and Linux; they are tested on every platform
 #[cfg_attr(windows, allow(dead_code))]
 /// `64 bytes from 10.0.0.1: icmp_seq=0 ttl=64 time=2.645 ms` → (3, 64).
 pub fn parse_ping(output: &str) -> Option<(u32, u8)> {
@@ -342,22 +434,63 @@ pub fn parse_ping(output: &str) -> Option<(u32, u8)> {
     Some((ms.round() as u32, ttl))
 }
 
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 /// `? (10.0.0.1) at 0:11:22:a:b:c on en0 ifscope [ethernet]` → 10.0.0.1 → "00-11-22-0A-0B-0C".
 pub fn parse_arp(output: &str) -> HashMap<Ipv4Addr, String> {
     output
         .lines()
         .filter_map(|line| {
             let ip = line.split_once('(')?.1.split_once(')')?.0.parse().ok()?;
-            let mac = line.split_once(" at ")?.1.split_whitespace().next()?;
-            let bytes: Vec<u8> = mac.split(':').filter_map(|h| u8::from_str_radix(h, 16).ok()).collect();
-            let usable = bytes.len() == 6 && bytes[0] & 1 == 0 && bytes.iter().any(|b| *b != 0);
-            usable.then(|| (ip, bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join("-")))
+            Some((ip, unicast_mac(line.split_once(" at ")?.1.split_whitespace().next()?)?))
         })
         .collect()
 }
 
+/// `0:11:22:a:b:c` → "00-11-22-0A-0B-0C"; broadcast, multicast and all-zero addresses → None.
 #[cfg_attr(windows, allow(dead_code))]
+fn unicast_mac(mac: &str) -> Option<String> {
+    let bytes: Vec<u8> = mac.split(':').filter_map(|h| u8::from_str_radix(h, 16).ok()).collect();
+    let usable = bytes.len() == 6 && bytes[0] & 1 == 0 && bytes.iter().any(|b| *b != 0);
+    usable.then(|| bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join("-"))
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+/// Linux `/proc/net/arp`: `10.0.0.1  0x1  0x2  00:11:22:0a:0b:0c  *  eth0`; flags 0x0 is an unanswered entry.
+pub fn parse_proc_arp(table: &str) -> HashMap<Ipv4Addr, String> {
+    table
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            if f.len() < 4 || f[2] == "0x0" {
+                return None;
+            }
+            Some((f[0].parse().ok()?, unicast_mac(f[3])?))
+        })
+        .collect()
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+/// Linux `/proc/net/route`: the default route (destination 0) with the lowest metric. The kernel prints
+/// addresses as the raw 32-bit value, so `to_ne_bytes` gives the bytes back in network order.
+pub fn parse_proc_route(table: &str) -> Option<Ipv4Addr> {
+    const RTF_GATEWAY: u32 = 0x2;
+    table
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            let hex = |i: usize| f.get(i).and_then(|v| u32::from_str_radix(v, 16).ok());
+            if hex(1)? != 0 || hex(3)? & RTF_GATEWAY == 0 {
+                return None;
+            }
+            Some((f.get(6)?.parse::<u32>().ok()?, Ipv4Addr::from(hex(2)?.to_ne_bytes())))
+        })
+        .min_by_key(|(metric, _)| *metric)
+        .map(|(_, ip)| ip)
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 /// The `gateway: 10.0.0.1` line of `route -n get default`.
 pub fn parse_route_gateway(output: &str) -> Option<Ipv4Addr> {
     output.lines().find_map(|l| l.trim().strip_prefix("gateway:")?.trim().parse().ok())
@@ -389,5 +522,29 @@ mod tests {
 
         let route = "   route to: default\ndestination: default\n    gateway: 192.168.1.1\n  interface: en0\n";
         assert_eq!(parse_route_gateway(route), Some(Ipv4Addr::new(192, 168, 1, 1)));
+    }
+
+    #[test]
+    fn parses_linux_tables() {
+        let ping = "PING 10.0.0.1 (10.0.0.1) 56(84) bytes of data.\n64 bytes from 10.0.0.1: icmp_seq=1 ttl=63 time=1.42 ms\n";
+        assert_eq!(parse_ping(ping), Some((1, 63)));
+
+        let arp = "IP address       HW type     Flags       HW address            Mask     Device\n\
+                   10.0.0.1         0x1         0x2         00:11:22:0a:0b:0c     *        eth0\n\
+                   10.0.0.9         0x1         0x0         00:00:00:00:00:00     *        eth0\n";
+        let table = parse_proc_arp(arp);
+        assert_eq!(table.len(), 1);
+        assert_eq!(table[&Ipv4Addr::new(10, 0, 0, 1)], "00-11-22-0A-0B-0C");
+
+        // VPN default route with a higher metric next to the LAN one; the subnet route has no gateway
+        let route = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n\
+                     tun0\t00000000\t0100080A\t0003\t0\t0\t600\t00000000\t0\t0\t0\n\
+                     eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n\
+                     eth0\t0001A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0\n";
+        let lan = Ipv4Addr::from(0x0101_A8C0u32.to_ne_bytes());
+        assert_eq!(parse_proc_route(route), Some(lan));
+        if cfg!(target_endian = "little") {
+            assert_eq!(lan, Ipv4Addr::new(192, 168, 1, 1));
+        }
     }
 }

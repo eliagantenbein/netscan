@@ -1,4 +1,4 @@
-# Pushing a tag vX.Y.Z builds NetScan.exe and NetScan-macOS.zip and publishes them as a GitHub release.
+# Pushing a tag vX.Y.Z builds NetScan.exe, NetScan-macOS.zip and NetScan-linux-x86_64.tar.gz and publishes them as a GitHub release.
 # install.ps1 / install.sh and the in-app update check fetch from releases/latest.
 name: release
 
@@ -34,8 +34,25 @@ jobs:
           name: macos
           path: target/NetScan-macOS.zip
 
+  # 22.04 on purpose: its older glibc (2.35) lets the binary run on Ubuntu 22.04+, Debian 12+, Fedora, Mint
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --release
+      - run: cargo build --release
+      - run: |
+          mkdir NetScan
+          cp target/release/netscan NetScan/netscan
+          cp assets/icon.png NetScan/netscan.png
+          tar -czf NetScan-linux-x86_64.tar.gz NetScan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: NetScan-linux-x86_64.tar.gz
+
   release:
-    needs: [windows, macos]
+    needs: [windows, macos, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -43,7 +60,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-      - run: sha256sum NetScan.exe NetScan-macOS.zip > SHA256SUMS.txt
-      - run: gh release create "$GITHUB_REF_NAME" NetScan.exe NetScan-macOS.zip SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "NetScan $GITHUB_REF_NAME" --generate-notes
+      - run: sha256sum NetScan.exe NetScan-macOS.zip NetScan-linux-x86_64.tar.gz > SHA256SUMS.txt
+      - run: gh release create "$GITHUB_REF_NAME" NetScan.exe NetScan-macOS.zip NetScan-linux-x86_64.tar.gz SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "NetScan $GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

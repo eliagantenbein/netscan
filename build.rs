@@ -15,8 +15,9 @@ fn main() {
     fs::write(out, tsv).expect("OUT_DIR is writable");
 
     // icon for Explorer, start menu and taskbar; the window icon itself comes from assets/icon.png
+    // (cfg(windows) is the build machine, the env var the target: a cross check for Linux/macOS skips it)
     #[cfg(windows)]
-    {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         println!("cargo:rerun-if-changed=assets/icon.ico");
         winresource::WindowsResource::new().set_icon("assets/icon.ico").compile().expect("Windows-Ressource (Icon) nicht kompiliert");
     }

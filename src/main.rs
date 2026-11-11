@@ -225,6 +225,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("NetScan")
+            .with_app_id("netscan") // Wayland matches the window to netscan.desktop (icon, taskbar) by this id
             .with_inner_size([1180.0, 720.0])
             .with_min_inner_size([860.0, 520.0])
             .with_icon(eframe::icon_data::from_png_bytes(ICON).expect("the icon in assets/ is a valid PNG")),
@@ -887,7 +888,7 @@ impl App {
                     ui.label(RichText::new("NetScan").size(22.0).strong());
                     ui.label(RichText::new(format!("Version {VERSION}")).size(15.0));
                 });
-                ui.label("IP- und Port-Scanner für ICT-Techniker · Windows und macOS");
+                ui.label("IP- und Port-Scanner für ICT-Techniker · Windows, macOS und Linux");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| match &self.update {
                     None => {

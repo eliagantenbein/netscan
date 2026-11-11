@@ -1,8 +1,8 @@
 [package]
 name = "netscan"
-version = "0.2.4"
+version = "0.3.0"
 edition = "2021"
-description = "Fast IP and port scanner with device detection (OS, vendor, model), network map and Excel export - Windows and macOS"
+description = "Fast IP and port scanner with device detection (OS, vendor, model), network map and Excel export - Windows, macOS and Linux"
 license = "MIT"
 authors = ["Elia Gantenbein"]
 repository = "https://github.com/eliagantenbein/netscan"
