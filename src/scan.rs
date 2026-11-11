@@ -7,7 +7,7 @@ use crate::fingerprint;
 pub use crate::platform::{arp_table, gateway, hostname, local_networks, ping};
 use crate::platform::PING_WORKERS;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -186,13 +186,21 @@ pub fn tcp_open(ip: Ipv4Addr, port: u16, timeout_ms: u64) -> bool {
     TcpStream::connect_timeout(&SocketAddr::from((ip, port)), Duration::from_millis(timeout_ms)).is_ok()
 }
 
+/// Every worker holds a socket or a `ping` process with its pipes. Past the open-file limit connects fail
+/// silently and, on Linux, the window loses the descriptors it needs for Wayland/X11 buffers and dies.
+fn max_workers() -> usize {
+    static MAX: OnceLock<usize> = OnceLock::new();
+    // ponytail: /8 leaves room for two pools at once (ping processes use ~6 descriptors) plus the window
+    *MAX.get_or_init(|| (crate::platform::open_file_limit() / 8).max(16))
+}
+
 /// Runs `f` over `items` on up to `workers` threads, results in input order. Counts into `progress`;
 /// after a stop request the remaining items get `R::default()` without running `f`.
 pub fn par_map<T: Sync, R: Send + Default>(items: &[T], workers: usize, progress: &Progress, f: impl Fn(&T) -> R + Sync) -> Vec<R> {
     let next = AtomicUsize::new(0);
     let results: Vec<Mutex<Option<R>>> = items.iter().map(|_| Mutex::new(None)).collect();
     thread::scope(|s| {
-        for _ in 0..workers.min(items.len()) {
+        for _ in 0..workers.min(max_workers()).min(items.len()) {
             thread::Builder::new()
                 .stack_size(STACK)
                 .spawn_scoped(s, || loop {

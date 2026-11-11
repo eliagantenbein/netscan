@@ -63,6 +63,11 @@ mod imp {
 
     pub const PING_WORKERS: usize = 512;
 
+    /// Windows has no per-process limit on open sockets worth worrying about.
+    pub fn open_file_limit() -> usize {
+        usize::MAX
+    }
+
     #[link(name = "iphlpapi")]
     extern "system" {
         fn IcmpCreateFile() -> *mut c_void;
@@ -261,7 +266,15 @@ mod imp {
         data: *mut c_void,
     }
 
+    #[repr(C)]
+    struct Rlimit {
+        cur: u64,
+        max: u64,
+    }
+
     extern "C" {
+        fn getrlimit(resource: c_int, rl: *mut Rlimit) -> c_int;
+        fn setrlimit(resource: c_int, rl: *const Rlimit) -> c_int;
         fn getifaddrs(list: *mut *mut Ifaddrs) -> c_int;
         fn freeifaddrs(list: *mut Ifaddrs);
         fn getnameinfo(
@@ -273,6 +286,29 @@ mod imp {
     const AF_INET: u8 = 2;
     #[cfg(not(target_os = "macos"))]
     const AF_INET: u16 = 2;
+
+    /// Raises the open-file limit to the hard limit and returns it. Linux starts GUI apps with 1024 open
+    /// files, macOS with 256; a scan needs thousands of sockets at once.
+    pub fn open_file_limit() -> usize {
+        #[cfg(target_os = "macos")]
+        const RLIMIT_NOFILE: c_int = 8;
+        #[cfg(not(target_os = "macos"))]
+        const RLIMIT_NOFILE: c_int = 7;
+        // the kernels refuse more than OPEN_MAX (macOS) or nr_open (Linux, 2^20 by default)
+        #[cfg(target_os = "macos")]
+        const CEILING: u64 = 10240;
+        #[cfg(not(target_os = "macos"))]
+        const CEILING: u64 = 1 << 20;
+        let mut rl = Rlimit { cur: 0, max: 0 };
+        if unsafe { getrlimit(RLIMIT_NOFILE, &mut rl) } != 0 {
+            return 256;
+        }
+        let want = rl.max.min(CEILING);
+        if rl.cur < want && unsafe { setrlimit(RLIMIT_NOFILE, &Rlimit { cur: want, max: rl.max }) } == 0 {
+            rl.cur = want;
+        }
+        rl.cur.try_into().unwrap_or(usize::MAX)
+    }
 
     fn run(program: &str, args: &[&str]) -> String {
         Command::new(program).args(args).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
