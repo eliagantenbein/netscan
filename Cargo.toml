@@ -1,6 +1,6 @@
 [package]
 name = "netscan"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "Fast IP and port scanner with device detection (OS, vendor, model), network map and Excel export - Windows and macOS"
 license = "MIT"

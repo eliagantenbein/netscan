@@ -72,7 +72,7 @@ sh mac/build-app.sh
 
 Ergibt `target/NetScan.app` (Apple Silicon und Intel) und `target/NetScan-macOS.zip`. Beim ersten Scan fragt macOS nach dem Zugriff auf das lokale Netzwerk – erlauben, sonst findet NetScan nichts.
 
-**Herstellerliste:** Die IEEE-Liste `oui.csv` von <https://standards-oui.ieee.org/oui/oui.csv> im Browser herunterladen, als `data/oui.csv` ablegen und neu bauen. Ohne sie kommen Hersteller nur aus den Gerätedaten und einer kurzen eingebauten Liste.
+**Herstellerliste:** Die IEEE-Liste liegt als `data/oui.csv` im Repo und wird beim Bauen eingebaut. Auffrischen (alle paar Monate): <https://standards-oui.ieee.org/oui/oui.csv> im Browser herunterladen, `data/oui.csv` damit ersetzen, committen. Die IEEE-Seite blockiert automatische Downloads, deshalb geht das nur von Hand.
 
 **Release:** Version in `Cargo.toml` erhöhen, committen, Tag `vX.Y.Z` pushen. GitHub Actions baut dann `NetScan.exe` und `NetScan-macOS.zip` und veröffentlicht sie als Release.
 

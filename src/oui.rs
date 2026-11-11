@@ -55,4 +55,11 @@ mod tests {
         assert_eq!(vendor("DA-11-22-33-44-55").as_deref(), Some(RANDOM));
         assert_eq!(vendor("kaputt"), None);
     }
+
+    /// Release builds must carry the full IEEE list (data/oui.csv is in the repo).
+    #[test]
+    fn ieee_list_is_built_in() {
+        assert!(table().len() > 30_000, "data/oui.csv fehlt oder ist unvollstaendig");
+        assert_eq!(vendor("28-6F-B9-00-00-01").as_deref(), Some("Nokia Shanghai Bell Co., Ltd."));
+    }
 }
