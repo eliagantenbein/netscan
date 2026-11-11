@@ -793,8 +793,12 @@ impl App {
                                 Some(note) => ui.colored_label(WARN_COLOR, format!("⚠ {note}")),
                                 None => ui.label(""),
                             };
-                            if ui.button(port_action(*port)).clicked() {
-                                open_port(*ip, *port);
+                            match port_action(*port) {
+                                Some(action) if ui.button(action).clicked() => open_port(*ip, *port),
+                                Some(_) => {}
+                                None => {
+                                    ui.label("");
+                                }
                             }
                             ui.end_row();
                         }
@@ -1100,8 +1104,10 @@ fn detail_panel(ui: &mut Ui, h: &Host, is_new: bool) -> Option<Action> {
         }
         ui.horizontal_wrapped(|ui| {
             for &port in &h.services {
-                let button = ui.button(format!("{port} {}", parse::service_name(port)));
-                if button.on_hover_text(format!("{} – {}", parse::describe(port), port_action(port))).clicked() {
+                let action = port_action(port);
+                let hover = action.map_or(parse::describe(port), |a| format!("{} – {a}", parse::describe(port)));
+                let button = ui.add_enabled(action.is_some(), egui::Button::new(format!("{port} {}", parse::service_name(port))));
+                if button.on_hover_text(&hover).on_disabled_hover_text(&hover).clicked() {
                     open_port(h.ip, port);
                 }
             }
@@ -1124,16 +1130,19 @@ fn detail_panel(ui: &mut Ui, h: &Host, is_new: bool) -> Option<Action> {
 }
 
 /// What opening this port does, for buttons and tooltips.
-fn port_action(port: u16) -> &'static str {
-    match port {
+fn port_action(port: u16) -> Option<&'static str> {
+    Some(match port {
         22 => "SSH-Sitzung",
         3389 => "Remotedesktop",
         139 | 445 => "Freigaben öffnen",
         548 => "Apple-Freigabe öffnen",
         5900 => "VNC öffnen",
         21 => "FTP öffnen",
+        // these speak their own protocol; a browser would only show an error
+        23 | 25 | 53 | 88 | 110 | 135 | 143 | 389 | 465 | 515 | 554 | 587 | 636 | 902 | 993 | 995 | 1433 | 1521 | 2049
+        | 3268 | 3306 | 5357 | 5432 | 5985 | 5986 | 6379 | 9100 | 27017 | 62078 => return None,
         _ => "Im Browser öffnen",
-    }
+    })
 }
 
 fn open_port(ip: Ipv4Addr, port: u16) {
