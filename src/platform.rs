@@ -2,8 +2,9 @@
 //! Windows uses the IP Helper API; macOS and Linux use libc, the system tools and (Linux) /proc.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::net::Ipv4Addr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use imp::*;
 
@@ -43,6 +44,34 @@ pub fn latest_release(repo: &str) -> Result<String, String> {
         "" | "000" => Err("GitHub nicht erreichbar – keine Internetverbindung?".to_string()),
         code => Err(format!("GitHub antwortet mit HTTP {code}")),
     }
+}
+
+// the update helpers serve Windows only; they are tested on every platform
+#[cfg_attr(not(windows), allow(dead_code))]
+/// `NetScan.exe` → `NetScan.exe.download`, next to it.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    name.into()
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+/// A Windows program starts with "MZ"; an HTML error page does not.
+fn looks_like_exe(path: &Path) -> bool {
+    let mut head = [0u8; 2];
+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut head)).is_ok() && head == *b"MZ"
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+/// Puts `new` in place of `exe`. Windows lets a running program be renamed but not overwritten, so the old
+/// file moves aside to `.old`; the next update removes it, when nothing runs it anymore.
+fn replace_exe(exe: &Path, new: &Path) -> std::io::Result<()> {
+    let old = with_suffix(exe, ".old");
+    let _ = std::fs::remove_file(&old);
+    std::fs::rename(exe, &old)?;
+    std::fs::rename(new, exe).inspect_err(|_| {
+        let _ = std::fs::rename(&old, exe); // put the working version back
+    })
 }
 
 /// The string value of `key` in a flat JSON object; enough for one field of a known API answer.
@@ -218,11 +247,44 @@ mod imp {
         console(&["tracert", "-d", &ip.to_string()]);
     }
 
-    /// Runs the official install line in a visible window; it stops the installed NetScan and starts the new one.
+    /// Downloads the newest NetScan.exe with Windows' own curl, swaps it in and restarts. No PowerShell on purpose:
+    /// Defender blocks an app that starts `irm … | iex` as a download cradle (Trojan:Win32/Commando.B!ml).
+    /// If anything fails, the release page opens so the update can be done by hand.
     pub fn self_update(repo: &str) {
-        let line = format!("irm https://raw.githubusercontent.com/{repo}/main/install.ps1 | iex");
-        console(&["powershell", "-NoProfile", "-Command", &line]);
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static RUNNING: AtomicBool = AtomicBool::new(false);
+        if RUNNING.swap(true, Ordering::SeqCst) {
+            return; // second click while the download runs
+        }
+        let releases = format!("https://github.com/{repo}/releases/latest");
+        std::thread::spawn(move || {
+            let updated = std::env::current_exe().and_then(|exe| {
+                let download = super::with_suffix(&exe, ".download");
+                let fetched = Command::new("curl")
+                    .args(["-fsSL", "--max-time", "300", "-o"])
+                    .arg(&download)
+                    .arg(format!("{releases}/download/NetScan.exe"))
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .status()?
+                    .success();
+                if !fetched || !super::looks_like_exe(&download) {
+                    let _ = std::fs::remove_file(&download);
+                    return Err(std::io::Error::other("Download fehlgeschlagen"));
+                }
+                super::replace_exe(&exe, &download)?;
+                Command::new(&exe).spawn().map(drop)
+            });
+            match updated {
+                Ok(()) => std::process::exit(0),
+                Err(_) => {
+                    open(&releases);
+                    RUNNING.store(false, Ordering::SeqCst);
+                }
+            }
+        });
     }
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 }
 
 #[cfg(unix)]
@@ -546,6 +608,30 @@ pub fn parse_route_gateway(output: &str) -> Option<Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swaps_in_the_downloaded_exe() {
+        let dir = std::env::temp_dir().join(format!("netscan-update-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("NetScan.exe");
+        let download = with_suffix(&exe, ".download");
+        std::fs::write(&exe, b"MZ old").unwrap();
+        std::fs::write(&download, b"MZ new").unwrap();
+        std::fs::write(with_suffix(&exe, ".old"), b"left over from the last update").unwrap();
+
+        assert!(looks_like_exe(&download));
+        replace_exe(&exe, &download).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"MZ new");
+        assert_eq!(std::fs::read(with_suffix(&exe, ".old")).unwrap(), b"MZ old");
+        assert!(!download.exists());
+
+        // an error page instead of the program, or a failed rename, leaves the working version in place
+        std::fs::write(&download, b"<!DOCTYPE html>").unwrap();
+        assert!(!looks_like_exe(&download));
+        assert!(replace_exe(&exe, &dir.join("missing.exe")).is_err());
+        assert_eq!(std::fs::read(&exe).unwrap(), b"MZ new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn reads_release_tag() {

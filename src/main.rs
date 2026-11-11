@@ -985,7 +985,7 @@ impl App {
                 ui.label(format!("Installiert ist Version {VERSION}."));
                 ui.hyperlink_to("Was ist neu?", format!("{REPO_URL}/releases/latest"));
                 ui.add_space(8.0);
-                ui.label(RichText::new("Das Update läuft in einem eigenen Fenster; NetScan schliesst sich und startet neu.").weak());
+                ui.label(RichText::new("NetScan lädt das Update, schliesst sich und startet neu.").weak());
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button(RichText::new("Jetzt aktualisieren").strong()).clicked() {
