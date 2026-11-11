@@ -1,0 +1,4 @@
+# Windows: this folder uses `rustup override set stable-x86_64-pc-windows-gnullvm` (LLVM-MinGW, no Visual Studio).
+# A directory override beats this file, so macOS and other machines simply get stable.
+[toolchain]
+channel = "stable"

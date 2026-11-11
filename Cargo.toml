@@ -1,0 +1,23 @@
+[package]
+name = "netscan"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# Full DWARF for egui/wgpu makes debug and test binaries ~400 MB, which Windows then refuses to start
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[dependencies]
+chrono = "0.4.45"
+eframe = "0.37.0"
+egui_extras = "0.37.0"
+rfd = "0.18.0"
+rust_xlsxwriter = "0.102.0"
