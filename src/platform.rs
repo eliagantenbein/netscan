@@ -503,10 +503,11 @@ mod imp {
         spawn_first(&commands);
     }
 
-    /// Runs a command in a new Terminal window; the arguments are IPs and fixed words, nothing to escape.
+    /// Runs a command in a new Terminal window.
     #[cfg(target_os = "macos")]
     fn console(args: &[&str]) {
-        let script = format!("tell application \"Terminal\"\ndo script \"{}\"\nactivate\nend tell", args.join(" "));
+        let line = args.join(" ").replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!("tell application \"Terminal\"\ndo script \"{line}\"\nactivate\nend tell");
         let _ = Command::new("osascript").args(["-e", &script]).spawn();
     }
 
@@ -526,9 +527,15 @@ mod imp {
         console(&["tracepath", "-n", &ip.to_string()]);
     }
 
-    /// Runs the official install line in a terminal; it stops the running NetScan and starts the new one.
+    /// Runs the official install line in a terminal; it stops this NetScan, replaces it and starts the new one.
     pub fn self_update(repo: &str) {
-        console(&[&format!("curl -fsSL https://raw.githubusercontent.com/{repo}/main/install.sh | sh")]);
+        let exe = std::env::current_exe().ok();
+        // the bundle: NetScan.app/Contents/MacOS/netscan
+        #[cfg(target_os = "macos")]
+        let exe = exe.and_then(|e| e.ancestors().nth(3).map(|p| p.to_path_buf()));
+        // install.sh replaces this copy instead of its default location, so a copy started from elsewhere is updated too
+        let target = exe.map(|p| p.to_string_lossy().replace('\'', r"'\''")).unwrap_or_default();
+        console(&[&format!("curl -fsSL https://raw.githubusercontent.com/{repo}/main/install.sh | NETSCAN_TARGET='{target}' sh")]);
     }
 }
 

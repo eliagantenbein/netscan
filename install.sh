@@ -14,15 +14,21 @@ install_macos() {
 
     DEST=/Applications
     [ -w "$DEST" ] || { DEST="$HOME/Applications"; mkdir -p "$DEST"; }
+    APP="$DEST/NetScan.app"
+    # NetScan's update button passes its own bundle: the copy that was started is the one to replace.
+    # Only an .app in a writable folder, so rm -rf below never hits anything else.
+    case "${NETSCAN_TARGET:-}" in
+        *.app) if [ -w "$(dirname "$NETSCAN_TARGET")" ]; then APP=$NETSCAN_TARGET; fi ;;
+    esac
     pkill -x NetScan 2>/dev/null || true
-    rm -rf "$DEST/NetScan.app"
-    ditto "$TMP/NetScan.app" "$DEST/NetScan.app"
+    rm -rf "$APP"
+    ditto "$TMP/NetScan.app" "$APP"
     # curl sets no quarantine flag; this only matters if the zip came through a browser before
-    xattr -dr com.apple.quarantine "$DEST/NetScan.app" 2>/dev/null || true
+    xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 
-    echo "NetScan ist installiert: $DEST/NetScan.app"
+    echo "NetScan ist installiert: $APP"
     echo "Beim ersten Scan nach dem Zugriff auf das lokale Netzwerk gefragt? Erlauben, sonst findet NetScan nichts."
-    open "$DEST/NetScan.app"
+    open "$APP"
 }
 
 # Per user, no root: binary in ~/.local/bin, icon and menu entry under ~/.local/share (XDG standard paths)
@@ -35,11 +41,16 @@ install_linux() {
     DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
     ICONS="$DATA/icons/hicolor/256x256/apps"
     mkdir -p "$BIN" "$ICONS" "$DATA/applications"
+    EXE="$BIN/netscan"
+    # NetScan's update button passes its own path: the copy that was started is the one to replace
+    case "${NETSCAN_TARGET:-}" in
+        */netscan) if [ -w "$(dirname "$NETSCAN_TARGET")" ]; then EXE=$NETSCAN_TARGET; fi ;;
+    esac
     pkill -x netscan 2>/dev/null || true
     # copy, then rename: replaces the file even if an old NetScan is still running
-    cp "$TMP/NetScan/netscan" "$BIN/.netscan.new"
-    chmod 755 "$BIN/.netscan.new"
-    mv -f "$BIN/.netscan.new" "$BIN/netscan"
+    cp "$TMP/NetScan/netscan" "$EXE.new"
+    chmod 755 "$EXE.new"
+    mv -f "$EXE.new" "$EXE"
     cp "$TMP/NetScan/netscan.png" "$ICONS/netscan.png"
     cat > "$DATA/applications/netscan.desktop" <<DESKTOP
 [Desktop Entry]
@@ -47,7 +58,7 @@ Type=Application
 Name=NetScan
 GenericName=Netzwerkscanner
 Comment=IP- und Port-Scanner mit Geräteerkennung
-Exec="$BIN/netscan"
+Exec="$EXE"
 Icon=netscan
 Terminal=false
 Categories=Network;System;Monitor;
@@ -56,9 +67,9 @@ DESKTOP
     command -v update-desktop-database >/dev/null && update-desktop-database "$DATA/applications" 2>/dev/null || true
     command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q "$DATA/icons/hicolor" 2>/dev/null || true
 
-    echo "NetScan ist installiert: $BIN/netscan (im Anwendungsmenü unter «NetScan»)"
+    echo "NetScan ist installiert: $EXE (im Anwendungsmenü unter «NetScan»)"
     if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-        nohup "$BIN/netscan" >/dev/null 2>&1 &
+        nohup "$EXE" >/dev/null 2>&1 &
     fi
 }
 

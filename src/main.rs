@@ -215,6 +215,8 @@ struct App {
     update: Option<Update>,
     /// Set at start: the background check shows a popup if it finds a newer version.
     update_popup: bool,
+    /// The update runs; a second one would race it for the same file.
+    update_started: bool,
 }
 
 // eframe sets the Dock icon from this image at runtime, so macOS gets the version with Apple's margin
@@ -282,6 +284,7 @@ impl App {
             about: false,
             update: None,
             update_popup: false,
+            update_started: false,
         };
         if let Some(text) = platform::settings_file().and_then(|p| std::fs::read_to_string(p).ok()) {
             app.apply_settings(&text);
@@ -495,8 +498,9 @@ impl App {
         }
         if esc {
             match &self.job {
+                // the popup comes up over a scan that started from the command line; Esc means "Später" there
+                _ if self.update_popup => self.update_popup = false,
                 Some(job) => job.progress.cancel(),
-                None if self.update_popup => self.update_popup = false,
                 None if self.about => self.about = false,
                 None => self.selected = None,
             }
@@ -915,8 +919,9 @@ impl App {
                         match result {
                             Ok(tag) if is_newer(tag, VERSION) => {
                                 ui.colored_label(NEW_COLOR, format!("Version {} ist verfügbar", tag.trim_start_matches('v')));
-                                if ui.button("Jetzt aktualisieren").clicked() {
-                                    platform::self_update(repo());
+                                let button = ui.add_enabled(!self.update_started, egui::Button::new("Jetzt aktualisieren"));
+                                if button.on_disabled_hover_text("Das Update läuft bereits. Für einen neuen Versuch NetScan neu starten.").clicked() {
+                                    self.start_update();
                                 }
                             }
                             Ok(_) => {
@@ -989,7 +994,7 @@ impl App {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button(RichText::new("Jetzt aktualisieren").strong()).clicked() {
-                        platform::self_update(repo());
+                        self.start_update();
                         self.update_popup = false;
                     }
                     if ui.button("Später").on_hover_text("Esc").clicked() {
@@ -997,6 +1002,13 @@ impl App {
                     }
                 });
             });
+    }
+
+    /// Starts the update once per run.
+    fn start_update(&mut self) {
+        if !std::mem::replace(&mut self.update_started, true) {
+            platform::self_update(repo());
+        }
     }
 }
 
